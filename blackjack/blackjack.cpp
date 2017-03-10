@@ -2,19 +2,53 @@
 //
 
 #include "stdafx.h"
+#include "blackjack.h"
+#include "../../DeckLibrary/DeckLibrary/DeckLibrary.h"
+#include "hand.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include "blackjack.h"
-
-void test_deck();
 
 #define MAX_LOADSTRING 100
 
+using namespace DeckLibrary;
+
+char *suit_string[] = { "S", "H", "D", "C" };
+char *rank_string[] = { "2","3","4","5","6","7","8","9","10","J","Q","K","A" };
+
 // Global Variables:
 HINSTANCE hInst;                                // current instance
+
+typedef void(* LPFNDLLSHUFFLE)();
+typedef int(* LPFNDLLREMAININGCARDS)();
+typedef struct_card(* LPFNDLLNDEXTCARD)();
+typedef struct_card(* LPFNDLLCURRENTCARD)();
+
+HINSTANCE hDLL;
+LPFNDLLSHUFFLE lpfnDllShuffle;    // Function pointer  
+LPFNDLLREMAININGCARDS lpfnDllRemainingCards;    // Function pointer  
+LPFNDLLNDEXTCARD lpfnDllNextCard;    // Function pointer  
+LPFNDLLCURRENTCARD lpfnDllCurrentCard;    // Function pointer  
+DWORD dwParam1;
+UINT  uParam2, uReturnVal;
+
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
+
+// window handles for text controls and buttong
+HWND hwndHitButton;
+HWND hwndStandButton;
+HWND hwndDealButton;
+HWND hwndCardsLeftEdit;
+HWND hwndDealerEdit[MAX_HAND_CARDS];
+HWND hwndDealerValue;
+HWND hwndDealerWins;
+HWND hwndPlayerEdit[MAX_HAND_CARDS];
+HWND hwndPlayerValue;
+HWND hwndPlayerWins;
+
+class_hand dealer;  // create a hand object to hold dealer cards
+class_hand player;  // create a hand object to hold player cards
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -32,7 +66,57 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     // TODO: Place code here.
 
-    // Initialize global strings
+	hDLL = LoadLibrary(L"../../DeckLibrary/Debug/DeckLibrary.dll");
+	if (hDLL == NULL)
+	{
+		return -1;
+	}
+
+	if (hDLL != NULL)
+	{
+		lpfnDllShuffle = (LPFNDLLSHUFFLE)GetProcAddress(hDLL, "shuffle");
+		if (!lpfnDllShuffle)
+		{
+			// handle the error  
+			FreeLibrary(hDLL);
+			return -1;
+		}
+	}
+
+	if (hDLL != NULL)
+	{
+		lpfnDllRemainingCards = (LPFNDLLREMAININGCARDS)GetProcAddress(hDLL, "remaining_cards");
+		if (!lpfnDllRemainingCards)
+		{
+			// handle the error  
+			FreeLibrary(hDLL);
+			return -1;
+		}
+	}
+
+	if (hDLL != NULL)
+	{
+		lpfnDllNextCard = (LPFNDLLNDEXTCARD)GetProcAddress(hDLL, "next_card");
+		if (!lpfnDllNextCard)
+		{
+			// handle the error  
+			FreeLibrary(hDLL);
+			return -1;
+		}
+	}
+
+	if (hDLL != NULL)
+	{
+		lpfnDllCurrentCard = (LPFNDLLCURRENTCARD)GetProcAddress(hDLL, "current_card");
+		if (!lpfnDllCurrentCard)
+		{
+			// handle the error  
+			FreeLibrary(hDLL);
+			return -1;
+		}
+	}
+
+	// Initialize global strings
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_BLACKJACK, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
@@ -100,17 +184,222 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 //
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
-	test_deck();
 
    hInst = hInstance; // Store instance handle in our global variable
 
-   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
-      CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
+   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+      CW_USEDEFAULT, CW_USEDEFAULT, 590, 425, nullptr, nullptr, hInstance, nullptr);
 
    if (!hWnd)
    {
       return FALSE;
    }
+
+   hwndHitButton = CreateWindow(
+	   L"BUTTON",  // Predefined class; Unicode assumed 
+	   L"Hit",      // Button text 
+	   WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+	   50,         // x position 
+	   270,         // y position 
+	   80,        // Button width
+	   50,        // Button height
+	   hWnd,     // Parent window
+	   (HMENU)IDC_HIT_BUTTON,       // No menu.
+	   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+	   NULL);      // Pointer not needed.
+
+   if (!hwndHitButton)
+   {
+	   return FALSE;
+   }
+
+   hwndStandButton = CreateWindow(
+	   L"BUTTON",  // Predefined class; Unicode assumed 
+	   L"Stand",      // Button text 
+	   WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+	   160,         // x position 
+	   270,         // y position 
+	   80,        // Button width
+	   50,        // Button height
+	   hWnd,     // Parent window
+	   (HMENU)IDC_STAND_BUTTON,       // No menu.
+	   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+	   NULL);      // Pointer not needed.
+
+   if (!hwndStandButton)
+   {
+	   return FALSE;
+   }
+
+   hwndDealButton = CreateWindow(
+	   L"BUTTON",  // Predefined class; Unicode assumed 
+	   L"Deal",      // Button text 
+	   WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+	   270,         // x position 
+	   270,         // y position 
+	   80,        // Button width
+	   50,        // Button height
+	   hWnd,     // Parent window
+	   (HMENU)IDC_DEAL_BUTTON,       // No menu.
+	   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+	   NULL);      // Pointer not needed.
+
+   if (!hwndStandButton)
+   {
+	   return FALSE;
+   }
+
+   HWND hwndExitButton = CreateWindow(
+	   L"BUTTON",  // Predefined class; Unicode assumed 
+	   L"Exit",      // Button text 
+	   WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+	   440,         // x position 
+	   270,         // y position 
+	   80,        // Button width
+	   50,        // Button height
+	   hWnd,     // Parent window
+	   (HMENU)IDC_EXIT_BUTTON,       // No menu.
+	   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+	   NULL);      // Pointer not needed.
+
+   if (!hwndExitButton)
+   {
+	   return FALSE;
+   }
+   
+   hwndCardsLeftEdit = CreateWindow(
+	   L"EDIT",  // Predefined class; Unicode assumed 
+	   L"Cards left = 52",      // Button text 
+	   WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+	   100,         // x position 
+	   10,         // y position 
+	   200,        // Button width
+	   30,        // Button height
+	   hWnd,     // Parent window
+	   NULL,       // No menu.
+	   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+	   NULL);      // Pointer not needed.
+
+   if (!hwndCardsLeftEdit)
+   {
+	   return FALSE;
+   }
+
+   for (int x = 0; x < MAX_HAND_CARDS; x++) {
+
+	   hwndDealerEdit[x] = CreateWindow(
+		   L"EDIT",  // Predefined class; Unicode assumed 
+		   L"Ace Spade",      // Button text 
+		   WS_TABSTOP | WS_VISIBLE | WS_CHILD | WS_BORDER,  // Styles 
+		   50 + 60*x,         // x position 
+		   50,         // y position 
+		   50,        // Button width
+		   40,        // Button height
+		   hWnd,     // Parent window
+		   NULL,       // No menu.
+		   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+		   NULL);      // Pointer not needed.
+
+	   if (!hwndDealerEdit[x])
+	   {
+		   return FALSE;
+	   }
+   }
+
+   hwndDealerValue = CreateWindow(
+	   L"EDIT",  // Predefined class; Unicode assumed 
+	   L"Dealer = 20",      // Button text 
+	   WS_TABSTOP | WS_VISIBLE | WS_CHILD,  // Styles 
+	   100,         // x position 
+	   110,         // y position 
+	   210,        // Button width
+	   40,        // Button height
+	   hWnd,     // Parent window
+	   NULL,       // No menu.
+	   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+	   NULL);      // Pointer not needed.
+
+   if (!hwndDealerValue)
+   {
+	   return FALSE;
+   }
+
+   hwndDealerWins = CreateWindow(
+	   L"EDIT",  // Predefined class; Unicode assumed 
+	   L"Wins = 0",      // Button text 
+	   WS_TABSTOP | WS_VISIBLE | WS_CHILD,  // Styles 
+	   340,         // x position 
+	   110,         // y position 
+	   100,        // Button width
+	   40,        // Button height
+	   hWnd,     // Parent window
+	   NULL,       // No menu.
+	   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+	   NULL);      // Pointer not needed.
+
+   if (!hwndDealerWins)
+   {
+	   return FALSE;
+   }
+
+   for (int x = 0; x < MAX_HAND_CARDS; x++) {
+
+	   hwndPlayerEdit[x] = CreateWindow(
+		   L"EDIT",  // Predefined class; Unicode assumed 
+		   L"Ace Spade",      // Button text 
+		   WS_TABSTOP | WS_VISIBLE | WS_CHILD | WS_BORDER,  // Styles 
+		   50 + 60 * x,         // x position 
+		   150,         // y position 
+		   50,        // Button width
+		   40,        // Button height
+		   hWnd,     // Parent window
+		   NULL,       // No menu.
+		   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+		   NULL);      // Pointer not needed.
+
+	   if (!hwndPlayerEdit[x])
+	   {
+		   return FALSE;
+	   }
+
+	   hwndPlayerValue = CreateWindow(
+		   L"EDIT",  // Predefined class; Unicode assumed 
+		   L"Player = 10",      // Button text 
+		   WS_TABSTOP | WS_VISIBLE | WS_CHILD,  // Styles 
+		   100,         // x position 
+		   210,         // y position 
+		   210,        // Button width
+		   40,        // Button height
+		   hWnd,     // Parent window
+		   NULL,       // No menu.
+		   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+		   NULL);      // Pointer not needed.
+
+	   if (!hwndPlayerValue)
+	   {
+		   return FALSE;
+	   }
+
+	   hwndPlayerWins = CreateWindow(
+		   L"EDIT",  // Predefined class; Unicode assumed 
+		   L"Wins = 0",      // Button text 
+		   WS_TABSTOP | WS_VISIBLE | WS_CHILD,  // Styles 
+		   340,         // x position 
+		   210,         // y position 
+		   100,        // Button width
+		   40,        // Button height
+		   hWnd,     // Parent window
+		   NULL,       // No menu.
+		   (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE),
+		   NULL);      // Pointer not needed.
+
+	   if (!hwndPlayerWins)
+	   {
+		   return FALSE;
+	   }
+   }
+
+   deal_button();
 
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
@@ -141,10 +430,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case IDM_ABOUT:
                 DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
                 break;
-            case IDM_EXIT:
-                DestroyWindow(hWnd);
-                break;
-            default:
+			case IDM_EXIT:
+			case IDC_EXIT_BUTTON:
+				DestroyWindow(hWnd);
+				break;
+			case IDC_HIT_BUTTON:
+				hit_button();
+				break;
+			case IDC_STAND_BUTTON:
+				stand_button();
+				break;
+			case IDC_DEAL_BUTTON:
+				deal_button();
+				break;
+			default:
                 return DefWindowProc(hWnd, message, wParam, lParam);
             }
         }
@@ -186,182 +485,161 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
     return (INT_PTR)FALSE;
 }
 
-enum enum_suit { spades, hearts, diamonds, clubs };
-char *suit_string[] = { "Spades", "Hearts", "Diamonds", "Clubs" };
-enum enum_rank { n2,n3,n4,n5,n6,n7,n8,n9,n10,jack,queen,king,ace };
-char *rank_string[] = { "2","3","4","5","6","7","8","9","10","Jack","Queen","King","Ace" };
-
-const int MAX_VALUES = 2; // for ace with 2 values
-
-class class_card { // public card with getters for external use
-	enum_suit suit;
-	enum_rank rank;
-	int num_values;
-	int values[MAX_VALUES];
-public:
-	class_card(enum_suit, enum_rank, int, int, int);
-	// getters for current card
-	enum_suit get_suit();
-	enum_rank get_rank();
-	int get_num_values();
-	int *get_values();
-};
-
-// constructor for public card
-class_card::class_card(enum_suit suit, enum_rank rank, int num_values, int value0, int value1) {
-	this->suit = suit;
-	this->rank = rank;
-	this->num_values = num_values;
-	this->values[0] = value0;
-	this->values[1] = value1;
-}
-	
-// public getters for card
-enum_suit class_card::get_suit() {
-	return this->suit;
+// clear the card text boxes so can start a new hand
+void reset_window() {
+	for (int x = 0; x < MAX_HAND_CARDS; x++) {
+		SetWindowText(hwndDealerEdit[x], NULL);
+	}
+	for (int x = 0; x < MAX_HAND_CARDS; x++) {
+		SetWindowText(hwndPlayerEdit[x], NULL);
+	}
 }
 
-enum_rank class_card::get_rank() {
-	return this->rank;
-}
+// fill window text boxes with correct text from hands
+// input: bool show_dealer - whether or not to show dealers first card and total
+void show_cards(bool show_dealer) {
+	char str[128];
+	char buf[128];
+	wchar_t wstr[256];
 
-int class_card::get_num_values() {
-	return this->num_values;
-}
-
-int *class_card::get_values() {
-	return this->values;
-}
-
-struct struct_card { // private card for internal deck use
-	enum_suit suit;
-	enum_rank rank;
-	int num_values;
-	int values[MAX_VALUES];
-};
-
-const int MAX_CARDS = 52;
-
-class class_deck {
-	const int NUM_SUITS = 4;
-	const int NUM_CARDS_PER_SUIT = MAX_CARDS / NUM_SUITS;
-	const int INITIAL_CARD_VALUE = 2;
-	const int NUM_NUMERIC_CARDS = 9;
-	const int ACE_VALUE0 = 1;
-	const int ACE_VALUE1 = 11;
-	const int FACE_VALUE = 10;
-
-	struct_card cards[MAX_CARDS];
-	int index = 0;  // current card of deck
-
-public:
-	class_deck();
-	void print_deck();  // print deck to console for debugging
-
-	// commands for deck
-	void shuffle();
-	int remaining_cards();
-	class_card next_card();
-	class_card current_card();
-
-};
-
-// constructor to initialize deck of card with correct values and shuffle
-class_deck::class_deck() {
-	srand((unsigned int)time(NULL));  // randomize deck to current time
-	int x = 0;
-	for (int y = 0; y < NUM_SUITS; y++) { // loop for each suit
-		for (int z = 0; z < NUM_CARDS_PER_SUIT; z++) { // loop for every card in suit
-			cards[x].suit = (enum_suit)y;
-			cards[x].rank = (enum_rank)z;
-			if (z < NUM_NUMERIC_CARDS) {			// numeric cards
-				cards[x].values[0] = z + INITIAL_CARD_VALUE;
-				cards[x].num_values = 1;
-			} else if (z + 1 == NUM_CARDS_PER_SUIT) { // ace
-				cards[x].values[0] = ACE_VALUE0;
-				cards[x].values[1] = ACE_VALUE1;
-				cards[x].num_values = 2;
-			} else {								// face cards
-				cards[x].values[0] = FACE_VALUE;
-				cards[x].num_values = 1;
-			}
-			x++;
+	// show remaining cards
+	sprintf(buf, "Cards remaining = %d", lpfnDllRemainingCards());
+	// show dealer cards
+	SetWindowText(hwndCardsLeftEdit, convertUnicode(wstr, buf));
+	for (int x = 0; x < dealer.get_num_cards(); x++) {  // loop through dealer cards
+		if (!show_dealer && x == 0) {	// dont show one dealer card until player is finished
+			//sprintf(buf, " - -");
+			sprintf(buf, "-%s-%s", rank_string[dealer.get_card(x).rank], suit_string[dealer.get_card(x).suit]);
+		} else {
+			sprintf(buf, " %s %s", rank_string[dealer.get_card(x).rank], suit_string[dealer.get_card(x).suit]);
+		}
+		SetWindowText(hwndDealerEdit[x], convertUnicode(wstr, buf));
+	}
+	if (show_dealer) { // only show dealer total after player is finished
+		//sprintf(buf, "Dealer Total = %d", dealer.get_total());
+		sprintf(buf, "Dealer Total = %s,%d", dealer.get_total_string(str), dealer.get_total());
+	} else {
+		//sprintf(buf, "Dealer Total = ?");
+		sprintf(buf, "Dealer ??????? %s,%d", dealer.get_total_string(str), dealer.get_total());
+	}
+	// if needed, concatonate bust, push, or wins to total
+	if (dealer.get_total() > BLACKJACK_TOTAL) {
+		strcat(buf, " BUST");
+	} else if (show_dealer) {
+		if (dealer.get_total() == player.get_total()) {
+			strcat(buf, " PUSH");
+		} else if (dealer.get_total() > player.get_total() && dealer.get_total() <= BLACKJACK_TOTAL) {
+			strcat(buf, " WINS");
 		}
 	}
-	shuffle();
-};
-
-int class_deck::remaining_cards() { // 0 when cant get any new cards
-	return MAX_CARDS - index - 1;
-}
-
-class_card class_deck::next_card() {
-	index++; // increment current card of deck, and validate value
-	return current_card();
-}
-
-class_card class_deck::current_card() {
-	if (index >= MAX_CARDS) {
-		index = MAX_CARDS - 1;
+	SetWindowText(hwndDealerValue, convertUnicode(wstr, buf));
+	// show dealer wins
+	sprintf(buf, "Wins = %d", dealer.get_wins());
+	SetWindowText(hwndDealerWins, convertUnicode(wstr, buf));
+	
+	// show player cards
+	for (int x = 0; x < player.get_num_cards(); x++) { // loop through player cards
+		sprintf(buf, " %s %s", rank_string[player.get_card(x).rank], suit_string[player.get_card(x).suit]);
+		SetWindowText(hwndPlayerEdit[x], convertUnicode(wstr, buf));
 	}
-	if (index < 0) {
-		index = 0;
+	// show player total
+	if (show_dealer) {
+		//sprintf(buf, "Player Total = %d", player.get_total());
+		sprintf(buf, "Player Total = %s,%d", player.get_total_string(str), player.get_total());
+	} else {
+		//sprintf(buf, "Player Total = %s", player.get_total_string(str));
+		sprintf(buf, "Player Total = %s,%d", player.get_total_string(str), player.get_total());
 	}
-	class_card card(cards[index].suit, cards[index].rank, cards[index].num_values, cards[index].values[0], cards[index].values[1]);
-	return card;
+	// if needed, concatonate bust, push, or wins to total
+	if (player.get_total() > BLACKJACK_TOTAL) {
+		strcat(buf, " BUST");
+	} else if (show_dealer) {
+		if (dealer.get_total() == player.get_total()) {
+			strcat(buf, " PUSH");
+		} else if (player.get_total() > dealer.get_total() && player.get_total() <= BLACKJACK_TOTAL) {
+			strcat(buf, " WINS");
+		}
+	}
+	SetWindowText(hwndPlayerValue, convertUnicode(wstr, buf));
+	// show player wins
+	sprintf(buf, "Wins = %d", player.get_wins());
+	SetWindowText(hwndPlayerWins, convertUnicode(wstr, buf));
 }
 
-// randomly draw a new card for every card in deck
-void class_deck::shuffle() {
-	for (int x = 0; x < MAX_CARDS; x++) { // loop for all cards
-		int rand_index = rand() % MAX_CARDS;
-		struct_card temp_card = cards[x];	// swap current card with random card
-		cards[x] = cards[rand_index];
-		cards[rand_index] = temp_card;
-	}
-	index = 0;
-}
-
-// output to visual studio debug window
-void console(char *str) {
-	strcat(str, "\n");
-	wchar_t wstr[512];
+// convert char* to unicode string
+// input: char * str
+// input and return: LPWSTR wstr
+LPWSTR convertUnicode(LPWSTR wstr, char *str) {
 	mbstowcs(wstr, str, strlen(str) + 1);//Plus null
-	LPWSTR ptr = wstr;
-	OutputDebugString(wstr);
+	return wstr;
 }
 
-// print deck to console
-void class_deck::print_deck() {
-	char str[256] = "";
-	for (int x = 0; x < MAX_CARDS; x++) {
-		sprintf(str, "%d: value = %d ", x, cards[x].values[0]);
-		strcat(str, suit_string[cards[x].suit]);
-		strcat(str, " ");
-		strcat(str, rank_string[cards[x].rank]);
-		console(str);
+// process hit button press
+void hit_button() {
+	// get one player card
+	player.add_card(lpfnDllNextCard()); // call DLL for next card
+	if (player.get_total() > BLACKJACK_TOTAL) {	// if bust, dealer wins
+		// new button states
+		EnableWindow(hwndHitButton, false);
+		EnableWindow(hwndStandButton, false);
+		EnableWindow(hwndDealButton, true);
+		dealer.increment_wins();
+		show_cards(true); // update window
+	} else if (player.get_total() == BLACKJACK_TOTAL) { // if blackjack, automatically stand
+		stand_button();
+	} else {	// keep playing
+		show_cards(false); // update window
 	}
-	sprintf(str, "index = %d ", index);
-	console(str);
 }
 
-// simple test of deck with shuffle to console
-void test_deck() {
-	class_deck deck;
-	deck.print_deck();
-	deck.next_card();
-	deck.print_deck();
-	for (int x = 1; x < MAX_CARDS+1; x++) {
-		deck.next_card();
+// process stand button press
+void stand_button() {
+	// now dealer hits
+	while (dealer.get_total() < DEALER_STAND) {  // continue hitting until >= 17
+		dealer.add_card(lpfnDllNextCard());	// call DLL for next card
 	}
-	deck.print_deck();
+	if (player.get_total() > dealer.get_total() || dealer.get_total() > BLACKJACK_TOTAL) {  // if player wins
+		player.increment_wins();
+	} else if (player.get_total() < dealer.get_total()) { // if dealer wins
+		dealer.increment_wins();
+	}
+	// set button states
+	EnableWindow(hwndHitButton, false);
+	EnableWindow(hwndStandButton, false);
+	EnableWindow(hwndDealButton, true);
+	show_cards(true);  // update window
 }
 
-
-
-
-
-
-
-
-
+// process deal button press
+// also used when starting window
+void deal_button() {
+	reset_window();		// clear card values
+	if (lpfnDllRemainingCards() < REDEAL_CARDS_LEFT) {	// reshuffle when cards get too low
+		lpfnDllShuffle();
+	}
+	dealer.reset_hand();	// empty dealer hand
+	player.reset_hand();	// empty player hand
+	// deal dealer and player 2 cards each
+	struct_card ace_card;
+	ace_card.num_values = 2;
+	ace_card.suit = spades;
+	ace_card.rank = ace;
+	ace_card.values[0] = 1;
+	ace_card.values[1] = 11;
+	dealer.add_card(ace_card);
+	//dealer.add_card(lpfnDllNextCard());
+	dealer.add_card(lpfnDllNextCard());
+	player.add_card(ace_card);
+	//player.add_card(lpfnDllNextCard());
+	player.add_card(lpfnDllNextCard());
+	// new button states
+	EnableWindow(hwndHitButton, true);
+	EnableWindow(hwndStandButton, true);
+	EnableWindow(hwndDealButton, false);
+	// if blackjack, automatically stand
+	if (player.get_total() == BLACKJACK_TOTAL || dealer.get_total() == BLACKJACK_TOTAL) {	
+		stand_button();
+	} else {
+		show_cards(false);		// otherwise, show card info in window
+	}
+}
